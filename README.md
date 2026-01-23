@@ -5,3 +5,36 @@ The task consists in fitting the PCA on train sequences (unsupervised) and then 
 The scores of the train sequences are used to train simple classifiers (e.g. Random Forest, Small MLP) on the reduced feature space.
 
 The performance of these classifiers is then evaluated on the test sequences projected into the same PCA space.
+
+## Interpretability analysis (CGR eigenfunctions)
+
+Use `interpretability_analysis.py` to generate publication-ready CGR eigenfunction plots, eigenvalue scree plots, and a markdown report.
+
+### Example
+
+```powershell
+python interpretability_analysis.py --train-path .\GUE_v2\GUE\prom\prom_core_tata\train.csv --test-path .\GUE_v2\GUE\prom\prom_core_tata\test.csv --n-train 1000 --n-test 500 --Jmax 10
+```
+
+Outputs are written to `analysis_results/interpretability/` by default, including:
+
+- `cgr_eigenfunctions.png`
+- `eigenvalue_scree.png`
+- `interpretability_report.md`
+
+## Scaling-law experiments
+
+Use `scaling_law_runner.py` to run the pipeline across multiple training set sizes and MLP sizes. The script saves a CSV summary and scaling-law plots.
+
+### Example
+
+```powershell
+python scaling_law_runner.py --train-path .\GUE_v2\GUE\prom\prom_core_tata\train.csv --test-path .\GUE_v2\GUE\prom\prom_core_tata\test.csv --train-sizes 250,500,1000 --mlp-sizes 16-4;64-32;128-64 --Jmax-list 6,10,14
+```
+
+Outputs are written to `analysis_results/scaling_laws/` by default, including:
+
+- `scaling_summary.csv`
+- `accuracy_vs_train_size.png`
+- `error_vs_train_size_loglog.png`
+- `scaling_law_report.md`

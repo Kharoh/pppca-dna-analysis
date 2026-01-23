@@ -122,6 +122,42 @@ def _build_S_matrix(point_processes: list[torch.Tensor],
     return S
 
 
+def _build_gram_matrix(point_processes: list[torch.Tensor],
+                       kernel: str,
+                       sigma: float,
+                       device: torch.device | None = None) -> torch.Tensor:
+    n = len(point_processes)
+    K = torch.zeros((n, n), dtype=torch.float64)
+    
+    # For Set kernel, we iterate directly (calculating Gaussian sums)
+    # For Linear/RBF, we calculate the Linear Integral first
+    
+    is_set = (kernel == "set")
+    
+    prog = tqdm(range(n * (n + 1) // 2), desc=f"Building {kernel} Gram matrix")
+
+    for i in range(n):
+        Pi = point_processes[i]
+        for j in range(i, n):
+            Pj = point_processes[j]
+            
+            if is_set:
+                # Direct Set Kernel calculation
+                val = _pairwise_set_gauss(Pi, Pj, sigma)
+            else:
+                # Linear Integral (needed for both Linear and RBF)
+                # Note: We pass block_cols=8192 as default, can be parameterized
+                val = _pairwise_integral_FiFj_outermin(Pi, Pj, device=device).item()
+            
+            K[i, j] = val
+            if i != j:
+                K[j, i] = val
+            prog.update(1)
+            
+    return K
+
+
+
 def _center_gram_from_S(S: torch.Tensor) -> torch.Tensor:
     """
     K = H S H with H = I - 11^T/n, equivalent to elementwise centering:
@@ -140,9 +176,74 @@ def _center_gram_from_S(S: torch.Tensor) -> torch.Tensor:
     # Symmetrize for numerical stability
     return 0.5 * (K + K.T)
 
+def _pairwise_set_gauss(points_i: torch.Tensor, 
+                        points_j: torch.Tensor, 
+                        sigma: float) -> float:
+    """
+    Computes Set Kernel: Sum of Gaussians between all pairs of points.
+    K(Pi, Pj) = Sum_{p in Pi} Sum_{q in Pj} exp(-||p-q||^2 / (2*sigma^2))
+    """
+    if points_i.numel() == 0 or points_j.numel() == 0:
+        return 0.0
+        
+    # Standard Squared L2 distance matrix using broadcasting
+    # Pi: (ki, d), Pj: (kj, d)
+    # (Pi^2 + Pj^2 - 2PiPj) approach is efficient
+    sq_norm_i = (points_i ** 2).sum(dim=1).unsqueeze(1) # (ki, 1)
+    sq_norm_j = (points_j ** 2).sum(dim=1).unsqueeze(0) # (1, kj)
+    dot = points_i @ points_j.T # (ki, kj)
+    dist_sq = sq_norm_i + sq_norm_j - 2 * dot
+    
+    # Gaussian kernel
+    gamma = 1.0 / (2 * sigma**2)
+    K_vals = torch.exp(-gamma * dist_sq)
+    
+    return K_vals.sum().item()
+
+def _rbf_transform_gram(S_lin: torch.Tensor, sigma: float) -> torch.Tensor:
+    """
+    Converts Linear Functional Gram Matrix (S_lin) to RBF Gram Matrix.
+    Uses polarization identity: ||Fi - Fj||^2 = <Fi,Fi> + <Fj,Fj> - 2<Fi,Fj>
+    """
+    # Diagonal elements are squared norms ||Fi||^2
+    diag = torch.diagonal(S_lin)
+    
+    # Distance squared in functional space
+    dist_sq = diag.unsqueeze(1) + diag.unsqueeze(0) - 2 * S_lin
+    dist_sq = torch.clamp(dist_sq, min=0.0) # Numerical safety
+    
+    gamma = 1.0 / (2 * sigma**2)
+    K_rbf = torch.exp(-gamma * dist_sq)
+    return K_rbf
+
+
+def estimate_sigma_median(S_matrix: torch.Tensor) -> float:
+    """
+    Estimates a good sigma using the median heuristic on the functional distances.
+    S_matrix must be the Linear Integral matrix S_ij = <Fi, Fj>.
+    """
+    # 1. Compute squared distances D^2_ij = S_ii + S_jj - 2*S_ij
+    diag = torch.diagonal(S_matrix)
+    dist_sq = diag.unsqueeze(1) + diag.unsqueeze(0) - 2 * S_matrix
+    dist_sq = torch.clamp(dist_sq, min=0.0)
+    
+    # 2. Flatten and filter out zeros (self-distances)
+    flat_dists = torch.sqrt(dist_sq.flatten())
+    flat_dists = flat_dists[flat_dists > 1e-6] # Remove diagonal zeros
+    
+    # 3. Take median
+    if flat_dists.numel() == 0:
+        return 1.0
+    median_dist = torch.median(flat_dists).item()
+    
+    return median_dist
+
+
 def pppca(
     point_processes: PointProcessesND,
     Jmax: int,
+    kernel: str = "linear",  # 'linear', 'rbf', 'set'
+    sigma: float = None,      # Bandwidth for rbf/set
 ) -> Dict[str, object]:
     """
     Multivariate dual-Gram PCA for point processes on [0,1]^d.
@@ -169,10 +270,31 @@ def pppca(
     if not point_processes:
         raise ValueError("point_processes must not be empty")
 
+    kernel = kernel.lower()
+    if kernel not in ["linear", "rbf", "set"]: # RBF is not adapted :( to point processes, distances between rep functions does not mean anything
+        raise ValueError("Kernel must be 'linear', 'rbf', or 'set'")
+        # https://www.perplexity.ai/search/https-www-perplexity-ai-search-ysY0royMQByBDD.uS0sBtQ#2
+
     n = len(point_processes)
 
-    # 1) Build uncentered second-moment matrix S via closed-form orthant integrals
-    S = _build_S_matrix(point_processes)  # (n, n)
+    if sigma is None and kernel == "rbf":
+        sigma = estimate_sigma_median(S)
+        print(f"Auto-tuned Sigma: {sigma} for rbf kernel with median heuristic")
+
+    elif sigma is None and kernel == "set":
+        sigma = 0.1
+        print(f"Auto-tuned Sigma: {sigma} for set kernel, with normalized point cloud distances")
+
+    # 1) Build Gram Matrix
+    # If RBF, we first build Linear, then transform.
+    # If Set or Linear, we build directly.
+    build_mode = "linear" if kernel == "rbf" else kernel
+
+    S = _build_gram_matrix(point_processes, kernel=build_mode, sigma=sigma)
+
+    # 2) If RBF, apply transformation now
+    if kernel == "rbf":
+        S = _rbf_transform_gram(S, sigma)
 
     # 2) Center to covariance Gram K = H S H
     K = _center_gram_from_S(S)            # (n, n)
@@ -195,57 +317,125 @@ def pppca(
     C = evecs_K[:, idx].contiguous()                 # (n, Jmax), c^{(ℓ)} columns
     scale = torch.sqrt(float(n) * eigenval)          # (Jmax,)
 
+    # Select components
+    pos_mask = op_evals > 1e-9
+    valid_count = pos_mask.sum().item()
+    n_comps = min(Jmax, valid_count)
+
     # 5) Scores: s_{iℓ} = sqrt(n λ_ℓ) c_i^{(ℓ)}
     scores = (C * scale.unsqueeze(0))                # (n, Jmax)
 
-    # 6) Provide an evaluator for eigenfunctions on-demand
-    #    η_ℓ(x) = (1/sqrt(nλ_ℓ)) Σ_i c_i^{(ℓ)} (F_i(x) - F̄(x)), with
-    #    F_i(x) = # { p in P_i : p <= x coordwise }, and F̄(x) = (1/n) Σ_i F_i(x)
-    processes_fp64 = [Pi.to(dtype=torch.float64) for Pi in point_processes]
+    # 6) Generic Kernel Eigenfunction Evaluator
+    # This projects "test probes" X onto the components using the Kernel Trick:
+    # eta(x) = Sum_i (alpha_i / sqrt(lambda)) * CenteredKernel(P_i, x)
+    
+    # Pre-cache training processes for the evaluator
+    train_procs = [p.to(dtype=torch.float32) for p in point_processes]
+    
+    # Pre-calculate row means for centering logic: M_i = (1/n) Sum_j K(Pi, Pj)
+    # We need row means of the UNCENTERED matrix S
+    row_means_train = S.mean(dim=1).to(torch.float32) # (n,)
+    grand_mean = S.mean().item()
+
     def eigenfun_eval(X: np.ndarray | torch.Tensor) -> np.ndarray:
         """
-        Evaluate all Jmax eigenfunctions at query locations X.
-
-        Input:
-          - X: (m_eval, d) array/tensor with entries in [0,1]
-        Output:
-          - values: (m_eval, Jmax) numpy array with η_ℓ(X_r) per column ℓ
+        Evaluate eigenfunctions at spatial locations X.
+        Interpretation depends on kernel:
+        - Linear/RBF: X represents the corner of a step function (Standard CDF view)
+        - Set: X represents a Dirac delta point process (Intensity view)
         """
-        X_t = torch.as_tensor(X, dtype=torch.float64)           # (m_eval, d)
+        X_t = torch.as_tensor(X, dtype=torch.float32)
+        if X_t.ndim == 1: X_t = X_t.unsqueeze(0) # (m, d)
         m_eval, d = X_t.shape
-        # Compute F_i(X) for all i: counts of points <= X (coordwise)
-        # Vectorized per i; complexity ~ sum_i k_i * m_eval
-        Fi_list = []
-        for Pi in processes_fp64:
-            if Pi.numel() == 0:
-                Fi = torch.zeros((m_eval,), dtype=torch.float64)
-            else:
-                # Pi: (k_i, d), X_t: (m_eval, d) -> comp: (k_i, m_eval, d)
-                comp = (Pi[:, None, :] <= X_t[None, :, :])      # boolean
-                le_all = comp.all(dim=-1)                       # (k_i, m_eval)
-                Fi = le_all.sum(dim=0).to(dtype=torch.float64)  # (m_eval,)
-            Fi_list.append(Fi)
-        F_stack = torch.stack(Fi_list, dim=1)                   # (m_eval, n)
-        Fbar = F_stack.mean(dim=1, keepdim=True)                # (m_eval, 1)
-        FDelta = F_stack - Fbar                                 # (m_eval, n)
+        
+        # We need K_test = Matrix of size (n_train, m_eval)
+        # containing K(Train_i, Probe_x)
+        K_test = torch.zeros((n, m_eval), dtype=torch.float32)
+        
+        # --- Kernel Specific Probe Calculation ---
+        if kernel == "set":
+            # For Set kernel, Probe is a single point at X
+            # K(Pi, x) = Sum_{p in Pi} exp(-||p-x||^2 / 2s^2)
+            gamma = 1.0 / (2 * sigma**2)
+            for i, Pi in enumerate(train_procs):
+                if Pi.numel() == 0: continue
+                # Pi: (ki, d), X_t: (m, d)
+                # Dist matrix (ki, m)
+                sq_i = (Pi**2).sum(1).unsqueeze(1)
+                sq_x = (X_t**2).sum(1).unsqueeze(0)
+                dot = Pi @ X_t.T
+                d2 = sq_i + sq_x - 2*dot
+                K_test[i, :] = torch.exp(-gamma * d2).sum(dim=0)
 
-        # η(X): (m_eval, Jmax) = (1/sqrt(nλ)) * FDelta @ C
-        Eta = (FDelta @ C) / scale.unsqueeze(0)                 # (m_eval, Jmax)
-        return Eta.cpu().numpy()
+        elif kernel == "linear":
+            # Linear Functional Probe: K(Pi, x) = F_i(x)
+            # (Cumulative count of points in Pi <= x)
+            # This is exactly what the old code did
+            X_dbl = X_t.to(torch.float64)
+            for i, Pi in enumerate(train_procs):
+                if Pi.numel() == 0: continue
+                comp = (Pi.to(torch.float64)[:, None, :] <= X_dbl[None, :, :])
+                K_test[i, :] = comp.all(dim=-1).sum(dim=0).float()
+                
+        elif kernel == "rbf":
+            # RBF Functional Probe: K(Pi, x) = exp(-gamma * ||Fi - Fx||^2)
+            # We know ||Fi - Fx||^2 = ||Fi||^2 + ||Fx||^2 - 2<Fi, Fx>
+            # ||Fi||^2 is diag(G)
+            # <Fi, Fx> is F_i(x) (computed same as linear)
+            # ||Fx||^2 is Prod(1 - x_d) (Integral of step function squared)
+            
+            # 1. Get <Fi, Fx> (Linear part)
+            Linear_part = torch.zeros((n, m_eval), dtype=torch.float32)
+            X_dbl = X_t.to(torch.float64)
+            for i, Pi in enumerate(train_procs):
+                if Pi.numel() == 0: continue
+                comp = (Pi.to(torch.float64)[:, None, :] <= X_dbl[None, :, :])
+                Linear_part[i, :] = comp.all(dim=-1).sum(dim=0).float()
+            
+            # 2. Get ||Fi||^2
+            norm_sq_train = torch.diagonal(S).float().unsqueeze(1) # (n, 1)
+            
+            # 3. Get ||Fx||^2 = Integral_{x to 1} 1 du = Product(1 - x_d)
+            # If x is outside [0,1], we clamp to handle valid logic
+            X_clamped = torch.clamp(X_t, 0.0, 1.0)
+            norm_sq_test = (1.0 - X_clamped).prod(dim=1).unsqueeze(0) # (1, m)
+            
+            # Combine
+            dist_sq = norm_sq_train + norm_sq_test - 2 * Linear_part
+            dist_sq = torch.clamp(dist_sq, min=0.0)
+            gamma = 1.0 / (2 * sigma**2)
+            K_test = torch.exp(-gamma * dist_sq)
+
+        # --- Centering the Test Matrix ---
+        # K_centered(Train, Test) = K(Train, Test) - Mean_Train(Train) - Mean_Test(Test) + GrandMean
+        # But for projection, we usually just need: K_test - RowMeans_Train
+        # (The formal centering for test points involves the mean of the test kernel column 
+        # relative to training set).
+        
+        # Standard Centering for Kernel PCA Projection:
+        # K_c_test = K_test - 1_n @ Mean_Test_Col - Row_Means_Train + Grand_Mean
+        # Actually simplest approximation: K_test - Row_Means_Train
+        
+        K_test_centered = K_test - row_means_train.unsqueeze(1)
+        
+        # Projection: Eta = (K_test_centered.T @ C) / scale
+        Eta = (K_test_centered.T @ C.cpu().float()) / scale.cpu().float().unsqueeze(0)
+        
+        return Eta.numpy()
 
     # Prepare outputs
-    eigenval_np = eigenval.cpu().numpy()
+    # eigenval_np = eigenval.cpu().numpy()
+    # coeff_np = C.cpu().numpy()  # c^{(ℓ)} columns
     scores_df = pd.DataFrame(
         scores.cpu().numpy(),
-        columns=[f"axis{i}" for i in range(1, idx.numel() + 1)],
+        columns=[f"axis{i}" for i in range(1, n_comps + 1)],
     )
-    coeff_np = C.cpu().numpy()  # c^{(ℓ)} columns
-
+    
     return {
-        "eigenval": eigenval_np.tolist(),
+        "eigenval": eigenval.cpu().numpy().tolist(),
         "scores": scores_df,
-        "coeff": coeff_np,
-        "eigenfun": eigenfun_eval,  # call with X (m_eval, d)
+        "coeff": C.cpu().numpy(),
+        "eigenfun": eigenfun_eval,
     }
 
 # Plotting examples

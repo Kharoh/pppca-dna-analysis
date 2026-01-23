@@ -1,5 +1,5 @@
 from typing import List, Dict
-from utils.dna_to_point_processes_2d import dna_to_point_processes
+from utils.dna_to_point_processes_cgr import dna_to_point_processes
 from pppca import pppca, _pairwise_integral_FiFj_outermin
 
 import torch
@@ -17,9 +17,10 @@ class DNAPPCA:
     """
     DNA Point Process PCA wrapper using EXACT analytical integration.
     """
-    
-    def __init__(self, Jmax: int):
+
+    def __init__(self, Jmax: int, kernel: str):
         self.Jmax = Jmax
+        self.kernel = kernel
         self.pca_results = None
         self.train_processes = None
         
@@ -39,7 +40,7 @@ class DNAPPCA:
 
         # 2. Fit PPPCA
         # This computes the eigenvalues and coefficients
-        self.pca_results = pppca(self.train_processes, Jmax=self.Jmax)
+        self.pca_results = pppca(self.train_processes, Jmax=self.Jmax, kernel=self.kernel)
         
         # 3. Compute statistics needed for projecting NEW data.
         # We need the S matrix (uncentered Gram matrix) statistics.
@@ -379,13 +380,16 @@ def run_dna_analysis_pipeline(
     n_train: int,
     n_test: int,
     Jmax: int = 5,
+    kernel: str = "linear",
     output_dir: str = '.',
     random_seed: int = 42,
     use_nn: bool = True,
     nn_hidden_dims: list = [64, 32],
     nn_epochs: int = 100,
     nn_batch_size: int = 32,
-    nn_learning_rate: float = 0.001
+    nn_learning_rate: float = 0.001,
+    make_plots: bool = True,
+    plot_prefix: str | None = None
 ):
     """
     Complete workflow to load data, fit PPPCA, project test data, and train classifiers.
@@ -416,6 +420,10 @@ def run_dna_analysis_pipeline(
         Batch size for neural network training.
     nn_learning_rate : float, default=0.001
         Learning rate for neural network.
+    make_plots : bool, default=True
+        Whether to generate and save plots.
+    plot_prefix : str, optional
+        Prefix for plot filenames to avoid collisions in batch runs.
     """
     
     # Create output directory if it doesn't exist
@@ -459,7 +467,7 @@ def run_dna_analysis_pipeline(
 
     # 3. Fit PPPCA on Training Data
     print(f"\\n[3/6] Fitting PPPCA (Jmax={Jmax})...")
-    pca_model = DNAPPCA(Jmax=Jmax)
+    pca_model = DNAPPCA(Jmax=Jmax, kernel=kernel)
     
     train_scores = pca_model.fit_transform(train_seqs)
     eigenvals = np.array(pca_model.pca_results['eigenval'])
@@ -519,7 +527,26 @@ def run_dna_analysis_pipeline(
         print("\\nClassification Report:")
         print(classification_report(y_test, y_test_pred_nn))
 
+    def _plot_path(base_name: str) -> str:
+        if plot_prefix:
+            base_name = f"{plot_prefix}_{base_name}"
+        return os.path.join(output_dir, base_name)
+
     # --- Visualization ---
+    if not make_plots:
+        return {
+            'pca_model': pca_model,
+            'rf_classifier': rf_model,
+            'nn_classifier': nn_model,
+            'nn_history': nn_history,
+            'train_scores': train_scores,
+            'test_scores': test_scores,
+            'rf_accuracy': acc_rf,
+            'rf_mcc': mcc_rf,
+            'nn_accuracy': acc_nn,
+            'nn_mcc': mcc_nn,
+            'eigenvalues': eigenvals
+        }
     
     # 1. Score Plot (PC1 vs PC2) - now with both RF and NN predictions if available
     fig, axes = plt.subplots(1, 2 if use_nn else 1, figsize=(18 if use_nn else 10, 5))
@@ -546,7 +573,7 @@ def run_dna_analysis_pipeline(
         axes[1].set_title(f'PPPCA Scores\\nNeural Network Acc: {acc_nn:.2%}')
         axes[1].legend()
     
-    save_path = os.path.join(output_dir, 'pca_scores_projection.png')
+    save_path = _plot_path('pca_scores_projection.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"\\nSaved score plot to: {save_path}")
     plt.close()
@@ -569,7 +596,7 @@ def run_dna_analysis_pipeline(
         axes[1].set_ylabel('True Label')
         axes[1].set_xlabel('Predicted Label')
     
-    cm_path = os.path.join(output_dir, 'confusion_matrices.png')
+    cm_path = _plot_path('confusion_matrices.png')
     plt.savefig(cm_path, dpi=300, bbox_inches='tight')
     print(f"Saved confusion matrices to: {cm_path}")
     plt.close()
@@ -600,7 +627,7 @@ def run_dna_analysis_pipeline(
         axes[1].legend()
         axes[1].grid(alpha=0.3)
         
-        history_path = os.path.join(output_dir, 'nn_training_history.png')
+        history_path = _plot_path('nn_training_history.png')
         plt.savefig(history_path, dpi=300, bbox_inches='tight')
         print(f"Saved NN training history to: {history_path}")
         plt.close()
@@ -615,7 +642,8 @@ def run_dna_analysis_pipeline(
         'rf_accuracy': acc_rf,
         'rf_mcc': mcc_rf,
         'nn_accuracy': acc_nn,
-        'nn_mcc': mcc_nn
+        'nn_mcc': mcc_nn,
+        'eigenvalues': eigenvals
     }
 
 
