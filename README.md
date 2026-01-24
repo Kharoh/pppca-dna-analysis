@@ -36,6 +36,10 @@ Use `capsnet_comparison.py` to train a Capsule Network on FCGR images and compar
 python capsnet_comparison.py --train-path .\GUE_v2\GUE\prom\prom_core_tata\train.csv --test-path .\GUE_v2\GUE\prom\prom_core_tata\test.csv --n-train 1000 --n-test 500 --Jmax 10 --caps-epochs 50
 ```
 
+```bash
+python capsnet_comparison.py --train-path ./GUE_v2/GUE/prom/prom_core_tata/train.csv --test-path ./GUE_v2/GUE/prom/prom_core_tata/test.csv --n-train 1000 --n-test 500 --Jmax 10 --caps-epochs 50
+```
+
 Outputs are written to `analysis_results/capsnet_comparison/` by default, including:
 
 - `capsnet_comparison_report.md`
