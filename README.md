@@ -8,7 +8,7 @@ The performance of these classifiers is then evaluated on the test sequences pro
 
 ## Interpretability analysis (CGR eigenfunctions)
 
-Use `interpretability_analysis.py` to generate publication-ready CGR eigenfunction plots, eigenvalue scree plots, and a markdown report.
+Use `interpretability_analysis.py` to generate publication-ready CGR eigenfunction plots, eigenvalue scree plots, hot-region maps, and a markdown report. Hot regions are computed by weighting PPPCA eigenfunctions by model usage: Random Forest feature importances and MLP effective input weights (absolute Linear-layer weight products). The resulting map highlights CGR regions that most influence each classifier.
 
 ### Example
 
@@ -20,6 +20,10 @@ Outputs are written to `analysis_results/interpretability/` by default, includin
 
 - `cgr_eigenfunctions.png`
 - `eigenvalue_scree.png`
+- `rf_hot_regions.png`
+- `nn_hot_regions.png`
+- `cgr_point_process_scatter.png`
+- `cgr_synthetic_promoter_patterns.png`
 - `interpretability_report.md`
 
 ## Scaling-law experiments

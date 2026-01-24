@@ -33,10 +33,16 @@ def dna_to_point_processes(sequences: List[str]) -> List[torch.Tensor]:
     # Define corner coordinates for the CGR unit square
     # Using tuples for faster lookup and unpacking in the loop
     corners = {
-        'A': (0.0, 0.0),
-        'C': (0.0, 1.0),
-        'G': (1.0, 1.0),
-        'T': (1.0, 0.0)
+        # 'A': (0.0, 0.0),
+        # 'C': (0.0, 1.0),
+        # # 'G': (1.0, 1.0), # acgt clockwise
+        # # 'T': (1.0, 0.0)
+        # 'T': (1.0, 1.0), # actg clockwise
+        # 'G': (1.0, 0.0)
+        'A': (0.0, 0.5),
+        'C': (0.5, 1.0),
+        'G': (1.0, 0.5),
+        'T': (0.5, 0.0)
     }
     
     processes = []
