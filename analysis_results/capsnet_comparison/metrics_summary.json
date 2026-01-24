@@ -1,8 +1,8 @@
 {
-  "rf_accuracy": 0.58,
-  "rf_mcc": 0.15953987676315842,
-  "nn_accuracy": 0.64,
-  "nn_mcc": 0.28176388915908956,
-  "capsnet_accuracy": 0.51,
-  "capsnet_mcc": 0.0
+  "rf_accuracy": 0.672,
+  "rf_mcc": 0.3461390076003342,
+  "nn_accuracy": 0.684,
+  "nn_mcc": 0.3691817126665957,
+  "capsnet_accuracy": 0.702,
+  "capsnet_mcc": 0.40398678771541485
 }

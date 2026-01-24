@@ -1,54 +1,54 @@
 # CapsNet vs PPPCA Baseline Report
 
 ## Experimental setup
-- Train CSV: `.\GUE_v2\GUE\prom\prom_core_tata\train.csv`
-- Test CSV: `.\GUE_v2\GUE\prom\prom_core_tata\test.csv`
-- Train size: 100
-- Test size: 100
+- Train CSV: `./GUE_v2/GUE/prom/prom_core_tata/train.csv`
+- Test CSV: `./GUE_v2/GUE/prom/prom_core_tata/test.csv`
+- Train size: 2000
+- Test size: 500
 - PPPCA Jmax: 10
 - PPPCA kernel: linear
 - MLP hidden dims: [16, 4]
 - CapsNet grid resolution: 64
-- CapsNet epochs: 5
+- CapsNet epochs: 10
 - CapsNet batch size: 32
 - CapsNet routing iterations: 3
 
 ## Performance summary
 | model       |   accuracy |      mcc |
 |:------------|-----------:|---------:|
-| CapsNet     |       0.51 | 0        |
-| PPPCA + RF  |       0.58 | 0.15954  |
-| PPPCA + MLP |       0.64 | 0.281764 |
+| CapsNet     |      0.702 | 0.403987 |
+| PPPCA + RF  |      0.672 | 0.346139 |
+| PPPCA + MLP |      0.684 | 0.369182 |
 
 ## Capsule Network classification report
 |              |   precision |   recall |   f1-score |   support |
 |:-------------|------------:|---------:|-----------:|----------:|
-| 0            |      0      |     0    |   0        |     49    |
-| 1            |      0.51   |     1    |   0.675497 |     51    |
-| accuracy     |      0.51   |     0.51 |   0.51     |      0.51 |
-| macro avg    |      0.255  |     0.5  |   0.337748 |    100    |
-| weighted avg |      0.2601 |     0.51 |   0.344503 |    100    |
+| 0            |    0.705394 | 0.685484 |   0.695297 |   248     |
+| 1            |    0.698842 | 0.718254 |   0.708415 |   252     |
+| accuracy     |    0.702    | 0.702    |   0.702    |     0.702 |
+| macro avg    |    0.702118 | 0.701869 |   0.701856 |   500     |
+| weighted avg |    0.702092 | 0.702    |   0.701908 |   500     |
 
 ## PPPCA + RF/MLP classification reports
 ### Random Forest
 
 |              |   precision |   recall |   f1-score |   support |
 |:-------------|------------:|---------:|-----------:|----------:|
-| 0            |    0.589744 | 0.469388 |   0.522727 |     49    |
-| 1            |    0.57377  | 0.686275 |   0.625    |     51    |
-| accuracy     |    0.58     | 0.58     |   0.58     |      0.58 |
-| macro avg    |    0.581757 | 0.577831 |   0.573864 |    100    |
-| weighted avg |    0.581597 | 0.58     |   0.574886 |    100    |
+| 0            |    0.694444 | 0.604839 |   0.646552 |   248     |
+| 1            |    0.65493  | 0.738095 |   0.69403  |   252     |
+| accuracy     |    0.672    | 0.672    |   0.672    |     0.672 |
+| macro avg    |    0.674687 | 0.671467 |   0.670291 |   500     |
+| weighted avg |    0.674529 | 0.672    |   0.670481 |   500     |
 
 ### MLP
 
 |              |   precision |   recall |   f1-score |   support |
 |:-------------|------------:|---------:|-----------:|----------:|
-| 0            |    0.622642 | 0.673469 |   0.647059 |     49    |
-| 1            |    0.659574 | 0.607843 |   0.632653 |     51    |
-| accuracy     |    0.64     | 0.64     |   0.64     |      0.64 |
-| macro avg    |    0.641108 | 0.640656 |   0.639856 |    100    |
-| weighted avg |    0.641477 | 0.64     |   0.639712 |    100    |
+| 0            |    0.700893 | 0.633065 |   0.665254 |   248     |
+| 1            |    0.67029  | 0.734127 |   0.700758 |   252     |
+| accuracy     |    0.684    | 0.684    |   0.684    |     0.684 |
+| macro avg    |    0.685591 | 0.683596 |   0.683006 |   500     |
+| weighted avg |    0.685469 | 0.684    |   0.683148 |   500     |
 
 ## Figures
 - pppca_scores_projection.png

@@ -5,7 +5,7 @@ from pppca import pppca, _pairwise_integral_FiFj_outermin
 import torch
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 import matplotlib.pyplot as plt
@@ -389,7 +389,7 @@ def run_dna_analysis_pipeline(
     nn_batch_size: int = 32,
     nn_learning_rate: float = 0.001,
     make_plots: bool = True,
-    plot_prefix: str | None = None
+    plot_prefix: Union[str, None] = None
 ):
     """
     Complete workflow to load data, fit PPPCA, project test data, and train classifiers.

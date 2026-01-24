@@ -12,7 +12,7 @@ import argparse
 import json
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -93,7 +93,7 @@ class CGRDataset(Dataset):
 
         counts = torch.bincount(flat_indices, minlength=self.res * self.res)
         image = counts.view(self.res, self.res).float()
-        image = image / (image.sum() + 1e-8)
+        image = image / (image.max() + 1e-8)
         return image.unsqueeze(0), label
 
 
@@ -104,8 +104,8 @@ class CapsuleLayer(nn.Module):
         num_route_nodes: int,
         in_channels: int,
         out_channels: int,
-        kernel_size: int | None = None,
-        stride: int | None = None,
+        kernel_size: Union[int | None] = None,
+        stride: Union[int | None] = None,
         num_iterations: int = 3,
     ):
         super().__init__()
@@ -115,16 +115,18 @@ class CapsuleLayer(nn.Module):
         self.out_channels = out_channels
 
         if num_route_nodes != -1:
+            # Digit Caps (Routing)
+            # Use 0.1 init to ensure signal flow
             self.route_weights = nn.Parameter(
-                torch.randn(num_capsules, num_route_nodes, in_channels, out_channels) * 0.01
+                torch.randn(num_capsules, num_route_nodes, in_channels, out_channels) * 0.1
             )
         else:
-            self.capsules = nn.ModuleList(
-                [
-                    nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=0)
-                    for _ in range(num_capsules)
-                ]
-            )
+            # Primary Caps (Conv)
+            self.capsules = nn.ModuleList([
+                nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=0)
+                for _ in range(num_capsules)
+            ])
+
 
     @staticmethod
     def squash(tensor: torch.Tensor, dim: int = -1) -> torch.Tensor:
@@ -133,13 +135,18 @@ class CapsuleLayer(nn.Module):
         return scale * tensor / torch.sqrt(squared_norm + 1e-8)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # --- PRIMARY CAPSULES ---
         if self.num_route_nodes == -1:
             outputs = torch.stack([capsule(x) for capsule in self.capsules], dim=1)
             batch_size, num_caps, out_dim, height, width = outputs.shape
-            outputs = outputs.view(batch_size, num_caps, out_dim, height * width)
-            outputs = outputs.permute(0, 1, 3, 2).contiguous()
-            outputs = outputs.view(batch_size, num_caps * height * width, out_dim)
-            return self.squash(outputs)
+            
+            # Flatten grid: (B, Caps, Dim, H, W) -> (B, Caps * H * W, Dim)
+            outputs = outputs.permute(0, 1, 3, 4, 2).contiguous()
+            outputs = outputs.view(batch_size, -1, out_dim)
+            
+            # CRITICAL FIX: Do NOT squash Primary Capsules!
+            # Raw vectors allow gradients to flow back to Conv1.
+            return outputs
 
         batch_size = x.size(0)
         u_hat = torch.einsum("bri,crio->bcro", x, self.route_weights)
@@ -240,7 +247,7 @@ def build_fcgr_dataset(seqs: List[str], labels: np.ndarray, grid_res: int) -> CG
 def train_capsnet(
     model: DNACapsNet,
     train_loader: DataLoader,
-    val_loader: DataLoader | None,
+    val_loader: Union[DataLoader | None],
     epochs: int,
     learning_rate: float,
     device: torch.device,
@@ -265,6 +272,20 @@ def train_capsnet(
         for images, labels in train_loader:
             images = images.to(device)
             labels = labels.to(device)
+
+            if epoch == 0: 
+                print(f"DEBUG: Input Max: {images.max().item():.4f}")
+                print(f"DEBUG: Input Mean: {images.mean().item():.4f}")
+                print(f"DEBUG: Input Non-Zeros: {(images > 0).float().sum().item()}")
+                
+                # Check if first layer is dead
+                with torch.no_grad():
+                    conv_out = F.relu(model.conv1(images))
+                    print(f"DEBUG: Conv1 Max: {conv_out.max().item():.4f}")
+                    
+                    # Check Primary Caps (BEFORE routing)
+                    prim_out = model.primary_caps(conv_out)
+                    print(f"DEBUG: Primary Caps Mean Norm: {prim_out.norm(dim=-1).mean().item():.4f}")
 
             optimizer.zero_grad()
             probs, _ = model(images)
@@ -382,7 +403,7 @@ def plot_pppca_scores(
     y_train: np.ndarray,
     y_test: np.ndarray,
     acc_rf: float,
-    acc_nn: float | None,
+    acc_nn: Union[float | None],
     output_dir: str,
 ) -> str:
     fig, axes = plt.subplots(1, 2 if acc_nn is not None else 1, figsize=(18 if acc_nn is not None else 9, 5))
@@ -453,11 +474,11 @@ def plot_pppca_scores(
 def plot_pppca_confusions(
     y_test: np.ndarray,
     y_pred_rf: np.ndarray,
-    y_pred_nn: np.ndarray | None,
+    y_pred_nn: Union[np.ndarray | None],
     acc_rf: float,
     mcc_rf: float,
-    acc_nn: float | None,
-    mcc_nn: float | None,
+    acc_nn: Union[float | None],
+    mcc_nn: Union[float | None],
     output_dir: str,
 ) -> str:
     fig, axes = plt.subplots(1, 2 if y_pred_nn is not None else 1, figsize=(12 if y_pred_nn is not None else 6, 5))
@@ -896,7 +917,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--caps-grid-res", type=int, default=64, help="FCGR grid resolution")
     parser.add_argument("--caps-epochs", type=int, default=50, help="CapsNet epochs")
     parser.add_argument("--caps-batch-size", type=int, default=32, help="CapsNet batch size")
-    parser.add_argument("--caps-learning-rate", type=float, default=0.001, help="CapsNet learning rate")
+    parser.add_argument("--caps-learning-rate", type=float, default=0.00001, help="CapsNet learning rate")
     parser.add_argument("--caps-iterations", type=int, default=3, help="Routing iterations")
     parser.add_argument("--caps-primary-caps", type=int, default=8, help="Primary capsule count")
     parser.add_argument("--caps-primary-dim", type=int, default=32, help="Primary capsule dimension")
