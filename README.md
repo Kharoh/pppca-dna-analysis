@@ -26,6 +26,24 @@ Outputs are written to `analysis_results/interpretability/` by default, includin
 - `cgr_synthetic_promoter_patterns.png`
 - `interpretability_report.md`
 
+## CapsNet vs PPPCA comparison
+
+Use `capsnet_comparison.py` to train a Capsule Network on FCGR images and compare it to PPPCA + Random Forest/MLP baselines. The script produces a markdown report, FCGR saliency maps, CapsNet embedding plots, and PPPCA hot-region maps.
+
+### Example
+
+```powershell
+python capsnet_comparison.py --train-path .\GUE_v2\GUE\prom\prom_core_tata\train.csv --test-path .\GUE_v2\GUE\prom\prom_core_tata\test.csv --n-train 1000 --n-test 500 --Jmax 10 --caps-epochs 50
+```
+
+Outputs are written to `analysis_results/capsnet_comparison/` by default, including:
+
+- `capsnet_comparison_report.md`
+- `capsnet_embedding_pca.png`
+- `capsnet_saliency_class_*.png`
+- `pppca_rf_hot_regions.png`
+- `pppca_mlp_hot_regions.png`
+
 ## Scaling-law experiments
 
 Use `scaling_law_runner.py` to run the pipeline across multiple training set sizes and MLP sizes. The script saves a CSV summary and scaling-law plots.
